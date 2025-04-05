@@ -1,0 +1,16 @@
+{
+  "name": "8917FinalProject",
+  "version": "1.0.0",
+  "description": "8917 final",
+  "scripts": {
+    "start": "func start",
+    "test": "echo \"No tests yet...\""
+  },
+  "dependencies": {
+    "@azure/functions": "^4.0.0",
+    "@azure/service-bus": "^7.9.5",
+    "@azure/storage-blob": "^12.26.0",
+    "axios": "^1.8.1"
+  },
+  "main": "src/functions/*.js"
+}
