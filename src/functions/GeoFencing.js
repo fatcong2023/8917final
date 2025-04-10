@@ -63,8 +63,8 @@ app.http('generateGpsPoints', {
             // Generate random GPS points
             const gpsPoints = generateRandomPointsInRadius(centerLat, centerLng, radiusKm, pointCount);
             
-            // Connection string for Service Bus
-            const connectionString = "Endpoint=sb://cst8917finalxiao.servicebus.windows.net/;SharedAccessKeyName=RootManageSharedAccessKey;SharedAccessKey=xCWNujVff35nszzKzrrdsms3kCGgnr04r+ASbB7p6dk=";
+            // Replace hardcoded connection string with environment variable
+            const connectionString = process.env.SERVICE_BUS_CONNECTION_STRING;
             const queueName = "gps";
             
             // Create a Service Bus client
