@@ -82,7 +82,6 @@ app.http('generateGpsPoints', {
     authLevel: 'anonymous',
     handler: async (request, context) => {
         context.log('Processing request to generate GPS points');
-        
         try {
             // Parse request body if provided, otherwise use defaults
             let requestData = {};
@@ -106,40 +105,32 @@ app.http('generateGpsPoints', {
             
             // Initialize Service Bus client and sender
             const queueName = process.env.SERVICE_BUS_QUEUE_NAME || "gps";
-            
-            try {
-                const serviceBusSender = getServiceBusSender(queueName);
-                
-                // Create message with timestamp
+            const serviceBusSender = getServiceBusSender(queueName);
+
+            // Fire-and-forget: send each point without awaiting
+            for (const point of gpsPoints) {
                 const message = {
                     timestamp: new Date().toISOString(),
-                    vehicleId: String(Math.floor(Math.random() * 9999) + 1).padStart(4, '0'), // Generate random 4-digit ID with leading zeros
-                    center: {
-                        latitude: centerLat,
-                        longitude: centerLng
-                    },
-                    radiusKm: radiusKm,
-                    points: gpsPoints
+                    vehicleId: String(Math.floor(Math.random() * 9999) + 1).padStart(4, '0'),
+                    latitude: point.latitude,
+                    longitude: point.longitude
                 };
-                
-                // Send the message
-                await serviceBusSender.sendMessages({ body: message });
-                context.log('Message sent to Service Bus queue:', queueName);
-                
-                return {
-                    status: 200,
-                    body: JSON.stringify({
-                        success: true,
-                        message: `Generated ${pointCount} GPS points within ${radiusKm}km radius and sent to Service Bus`,
-                        data: message
-                    }),
-                    headers: {
-                        'Content-Type': 'application/json'
-                    }
-                };
-            } catch (sbError) {
-                throw new Error(`Service Bus error: ${sbError.message}`);
+                serviceBusSender
+                    .sendMessages({ body: message })
+                    // .then(() => context.log(`Queued msg for vehicle ${message.vehicleId}`))
+                    .catch(sbErr => context.log.error('Service Bus send error', sbErr));
             }
+
+            // Return immediately
+            return {
+                status: 202,
+                body: JSON.stringify({
+                    success: true,
+                    message: `Queued ${gpsPoints.length} GPS messages for delivery.`,
+                    count: gpsPoints.length
+                }),
+                headers: { 'Content-Type': 'application/json' }
+            };
         } catch (error) {
             context.error('Error processing request:', error);
             return {
