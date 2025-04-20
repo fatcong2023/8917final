@@ -1,20 +1,34 @@
 const { app } = require('@azure/functions');
 const { ServiceBusClient } = require('@azure/service-bus');
 
-// Singleton Service Bus client for reuse across invocations
-let serviceBusClient = null;
-let serviceBusSender = null;
+// Connection management using module scope and lazy initialization
+let serviceBusClientInstance = null;
+let serviceBusSenderInstance = null;
 
-// Initialize Service Bus client
-function initServiceBusClient() {
-    if (!serviceBusClient) {
+// Initialize Service Bus client using the singleton pattern
+function getServiceBusClient() {
+    if (!serviceBusClientInstance) {
         const connectionString = process.env.SERVICE_BUS_CONNECTION_STRING;
         if (!connectionString) {
             throw new Error("SERVICE_BUS_CONNECTION_STRING environment variable is not configured");
         }
-        serviceBusClient = new ServiceBusClient(connectionString);
+        serviceBusClientInstance = new ServiceBusClient(connectionString, {
+            retryOptions: {
+                maxRetries: 5,
+                maxRetryDelayInMs: 60 * 1000 // 1 minute max delay
+            }
+        });
     }
-    return serviceBusClient;
+    return serviceBusClientInstance;
+}
+
+// Get or create a Service Bus sender
+function getServiceBusSender(queueName) {
+    if (!serviceBusSenderInstance) {
+        const client = getServiceBusClient();
+        serviceBusSenderInstance = client.createSender(queueName);
+    }
+    return serviceBusSenderInstance;
 }
 
 // Function to generate random points within a radius
@@ -94,14 +108,12 @@ app.http('generateGpsPoints', {
             const queueName = process.env.SERVICE_BUS_QUEUE_NAME || "gps";
             
             try {
-                const sbClient = initServiceBusClient();
-                if (!serviceBusSender) {
-                    serviceBusSender = sbClient.createSender(queueName);
-                }
+                const serviceBusSender = getServiceBusSender(queueName);
                 
                 // Create message with timestamp
                 const message = {
                     timestamp: new Date().toISOString(),
+                    vehicleId: String(Math.floor(Math.random() * 9999) + 1).padStart(4, '0'), // Generate random 4-digit ID with leading zeros
                     center: {
                         latitude: centerLat,
                         longitude: centerLng
@@ -144,23 +156,19 @@ app.http('generateGpsPoints', {
     }
 });
 
-// Add a function to clean up resources on app shutdown
-// app.onShutdown(async () => {
-//     if (serviceBusSender) {
-//         await serviceBusSender.close();
-//     }
-//     if (serviceBusClient) {
-//         await serviceBusClient.close();
-//     }
-// });
-
-
+// Resource cleanup - keep this part
 async function cleanupResources() {
-    if (serviceBusSender) {
-        await serviceBusSender.close();
-    }
-    if (serviceBusClient) {
-        await serviceBusClient.close();
+    try {
+        if (serviceBusSenderInstance) {
+            await serviceBusSenderInstance.close();
+            serviceBusSenderInstance = null;
+        }
+        if (serviceBusClientInstance) {
+            await serviceBusClientInstance.close();
+            serviceBusClientInstance = null;
+        }
+    } catch (error) {
+        console.error('Error during resource cleanup:', error);
     }
 }
 
