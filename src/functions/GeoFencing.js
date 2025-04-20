@@ -145,11 +145,25 @@ app.http('generateGpsPoints', {
 });
 
 // Add a function to clean up resources on app shutdown
-app.onShutdown(async () => {
+// app.onShutdown(async () => {
+//     if (serviceBusSender) {
+//         await serviceBusSender.close();
+//     }
+//     if (serviceBusClient) {
+//         await serviceBusClient.close();
+//     }
+// });
+
+
+async function cleanupResources() {
     if (serviceBusSender) {
         await serviceBusSender.close();
     }
     if (serviceBusClient) {
         await serviceBusClient.close();
     }
-});
+}
+
+// Call cleanupResources when needed, e.g., before exiting the process
+process.on('SIGTERM', cleanupResources);
+process.on('SIGINT', cleanupResources);
