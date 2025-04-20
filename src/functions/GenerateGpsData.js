@@ -1,20 +1,34 @@
 const { app } = require('@azure/functions');
 const { ServiceBusClient } = require('@azure/service-bus');
 
-// Singleton Service Bus client for reuse across invocations
-let serviceBusClient = null;
-let serviceBusSender = null;
+// Connection management using module scope and lazy initialization
+let serviceBusClientInstance = null;
+let serviceBusSenderInstance = null;
 
-// Initialize Service Bus client
-function initServiceBusClient() {
-    if (!serviceBusClient) {
+// Initialize Service Bus client using the singleton pattern
+function getServiceBusClient() {
+    if (!serviceBusClientInstance) {
         const connectionString = process.env.SERVICE_BUS_CONNECTION_STRING;
         if (!connectionString) {
             throw new Error("SERVICE_BUS_CONNECTION_STRING environment variable is not configured");
         }
-        serviceBusClient = new ServiceBusClient(connectionString);
+        serviceBusClientInstance = new ServiceBusClient(connectionString, {
+            retryOptions: {
+                maxRetries: 5,
+                maxRetryDelayInMs: 60 * 1000 // 1 minute max delay
+            }
+        });
     }
-    return serviceBusClient;
+    return serviceBusClientInstance;
+}
+
+// Get or create a Service Bus sender
+function getServiceBusSender(queueName) {
+    if (!serviceBusSenderInstance) {
+        const client = getServiceBusClient();
+        serviceBusSenderInstance = client.createSender(queueName);
+    }
+    return serviceBusSenderInstance;
 }
 
 // Function to generate random points within a radius
@@ -68,7 +82,6 @@ app.http('generateGpsPoints', {
     authLevel: 'anonymous',
     handler: async (request, context) => {
         context.log('Processing request to generate GPS points');
-        
         try {
             // Parse request body if provided, otherwise use defaults
             let requestData = {};
@@ -92,42 +105,32 @@ app.http('generateGpsPoints', {
             
             // Initialize Service Bus client and sender
             const queueName = process.env.SERVICE_BUS_QUEUE_NAME || "gps";
-            
-            try {
-                const sbClient = initServiceBusClient();
-                if (!serviceBusSender) {
-                    serviceBusSender = sbClient.createSender(queueName);
-                }
-                
-                // Create message with timestamp
+            const serviceBusSender = getServiceBusSender(queueName);
+
+            // Fire-and-forget: send each point without awaiting
+            for (const point of gpsPoints) {
                 const message = {
                     timestamp: new Date().toISOString(),
-                    center: {
-                        latitude: centerLat,
-                        longitude: centerLng
-                    },
-                    radiusKm: radiusKm,
-                    points: gpsPoints
+                    vehicleId: String(Math.floor(Math.random() * 9999) + 1).padStart(4, '0'),
+                    latitude: point.latitude,
+                    longitude: point.longitude
                 };
-                
-                // Send the message
-                await serviceBusSender.sendMessages({ body: message });
-                context.log('Message sent to Service Bus queue:', queueName);
-                
-                return {
-                    status: 200,
-                    body: JSON.stringify({
-                        success: true,
-                        message: `Generated ${pointCount} GPS points within ${radiusKm}km radius and sent to Service Bus`,
-                        data: message
-                    }),
-                    headers: {
-                        'Content-Type': 'application/json'
-                    }
-                };
-            } catch (sbError) {
-                throw new Error(`Service Bus error: ${sbError.message}`);
+                serviceBusSender
+                    .sendMessages({ body: message })
+                    // .then(() => context.log(`Queued msg for vehicle ${message.vehicleId}`))
+                    .catch(sbErr => context.log.error('Service Bus send error', sbErr));
             }
+
+            // Return immediately
+            return {
+                status: 202,
+                body: JSON.stringify({
+                    success: true,
+                    message: `Queued ${gpsPoints.length} GPS messages for delivery.`,
+                    count: gpsPoints.length
+                }),
+                headers: { 'Content-Type': 'application/json' }
+            };
         } catch (error) {
             context.error('Error processing request:', error);
             return {
@@ -144,23 +147,19 @@ app.http('generateGpsPoints', {
     }
 });
 
-// Add a function to clean up resources on app shutdown
-// app.onShutdown(async () => {
-//     if (serviceBusSender) {
-//         await serviceBusSender.close();
-//     }
-//     if (serviceBusClient) {
-//         await serviceBusClient.close();
-//     }
-// });
-
-
+// Resource cleanup - keep this part
 async function cleanupResources() {
-    if (serviceBusSender) {
-        await serviceBusSender.close();
-    }
-    if (serviceBusClient) {
-        await serviceBusClient.close();
+    try {
+        if (serviceBusSenderInstance) {
+            await serviceBusSenderInstance.close();
+            serviceBusSenderInstance = null;
+        }
+        if (serviceBusClientInstance) {
+            await serviceBusClientInstance.close();
+            serviceBusClientInstance = null;
+        }
+    } catch (error) {
+        console.error('Error during resource cleanup:', error);
     }
 }
 
